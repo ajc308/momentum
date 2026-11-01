@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan so new advisories show up even without a push.
+    - cron: '17 13 * * 1'
+
+permissions: {}
+
+jobs:
+  audit:
+    name: npm audit (production deps)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      # F-19: fail on any HIGH or CRITICAL advisory in production deps.
+      # Moderates / lows / dev-only chains are tracked, not blocking.
+      - run: npm audit --omit=dev --audit-level=high
+      # Scheduled runs have no human "actor," so GitHub's default failure
+      # emails are unreliable for the weekly cron trigger. Open (or leave
+      # open) a tracking issue on failure so a scan doesn't fail silently
+      # for weeks, and close it automatically once the audit is clean again.
+      - name: Open tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'npm audit (production deps) is failing in CI';
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,ci-failure',
+            });
+            if (openIssues.some((issue) => issue.title === title)) return;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: `The \`npm audit (production deps)\` CI job failed on [this run](${runUrl}) (trigger: \`${context.eventName}\`, ref: \`${context.ref}\`).\n\nRun \`npm audit --omit=dev --audit-level=high\` locally to see current findings. This issue stays open until the next successful run closes it automatically.`,
+              labels: ['security', 'ci-failure'],
+            });
+      - name: Close tracking issue on success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'npm audit (production deps) is failing in CI';
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,ci-failure',
+            });
+            for (const issue of openIssues.filter((issue) => issue.title === title)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Resolved by ${context.sha} — \`npm audit --omit=dev --audit-level=high\` is passing again.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+            }
+
+  typecheck:
+    name: tsc
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fitness_tracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run test:postgres
+        env:
+          TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/fitness_tracker_test
+      - run: npm run lint
+      - run: npm run build

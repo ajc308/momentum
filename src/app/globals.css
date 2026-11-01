@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --background: #f5f6f1;
+  --foreground: #111317;
+}
+
+@layer base {
+  html {
+    background: var(--background);
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-ink-950 text-fg antialiased;
+    min-height: 100dvh;
+    /* Subtle volt/magenta glow at the top of every page */
+    background-image:
+      radial-gradient(60rem 28rem at 15% -10%, rgba(198, 244, 50, 0.28), transparent 60%),
+      radial-gradient(50rem 24rem at 100% -5%, rgba(240, 20, 90, 0.07), transparent 60%);
+    background-repeat: no-repeat;
+  }
+  :focus-visible {
+    outline: 2px solid #4d7c0f;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  ::selection {
+    background: rgba(198, 244, 50, 0.55);
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-3xl border border-ink-700/70 bg-ink-900/90 shadow-card;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-fg-subtle;
+  }
+  .stat-num {
+    @apply font-display font-bold tabular-nums tracking-tight;
+  }
+  .field {
+    @apply w-full rounded-xl border border-ink-700 bg-ink-850 px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle
+      transition-colors focus:border-volt focus:outline-none focus:ring-2 focus:ring-volt/30 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .field-label {
+    @apply mb-1.5 block text-xs font-medium text-fg-muted;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition
+      disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98];
+  }
+  .btn-volt {
+    @apply btn bg-volt text-fg hover:bg-volt-soft hover:shadow-volt;
+  }
+  .btn-ghost {
+    @apply btn border border-ink-700 bg-ink-850 text-fg hover:border-ink-600 hover:bg-ink-800;
+  }
+  .icon-btn {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-full text-fg-muted transition hover:bg-ink-800 hover:text-fg;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold;
+  }
+}
+
+@layer utilities {
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Date inputs on iOS: keep them inside their box */
+input[type='date'] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 2.75rem;
+}
+input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

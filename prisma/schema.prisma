@@ -1,0 +1,227 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL") // uses connection pooling
+  directUrl = env("POSTGRES_URL_NON_POOLING") // uses a direct connection
+}
+
+// Simple workout session model matching your Google Sheets structure
+model WorkoutSession {
+  id               String    @id @default(cuid())
+  date             DateTime
+  source           String // "Peloton", "Apple Watch", "Gym", etc.
+  activity         String // "Cycling", "Weight Lifting", etc.
+  minutes          Int // Duration in minutes
+  miles            Float? // Distance for cardio activities
+  weightLifted     Float? // Total weight lifted for strength training
+  notes            String?
+  pelotonWorkoutId String?   @unique // Peloton workout ID for dedup
+  healthWorkoutId  String?   @unique // Apple Health workout ID for dedup (src/lib/apple-health.ts)
+  // Class / workout details (null for manual entries)
+  discipline       String? // Peloton fitness_discipline, e.g. "strength", "cycling"
+  classTitle       String? // e.g. "20 min Chest & Back Strength", or the Apple workout name
+  instructor       String?
+  calories         Int?
+  avgHeartRate     Int? // bpm, from a paired monitor or the Apple Watch
+  maxHeartRate     Int?
+  totalOutputKj    Int? // cycling/rowing output
+  // Soft-delete (F-06): writes that go through the API set deletedAt
+  // instead of removing the row, so an audit trail + recovery is possible.
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([date])
+  @@index([source, date])
+  @@index([deletedAt])
+  @@map("workout_sessions")
+}
+
+model PelotonCredential {
+  id           String   @id @default(cuid())
+  userId       String   @unique // Peloton user ID
+  sessionId    String // Session cookie (encrypted at rest — see src/lib/crypto.ts)
+  accessToken  String? // OAuth access token (encrypted at rest)
+  refreshToken String? // OAuth refresh token (encrypted at rest)
+  expiresAt    Int? // Unix timestamp
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("peloton_credentials")
+}
+
+// Body weight history, entered manually (dashboard or the log_weight MCP
+// tool). One row per calendar day; logging again for a day replaces it.
+model BodyMeasurement {
+  id                 String   @id @default(cuid())
+  date               DateTime @unique // UTC calendar day label (midnight), one row per day
+  weightLbs          Float
+  bmi                Float?
+  bodyFatPct         Float?
+  waterPct           Float?
+  musclePct          Float?
+  boneMassPct        Float?
+  bmr                Float? // kcal/day
+  visceralFatLevel   Float?
+  subcutaneousFatPct Float?
+  proteinPct         Float?
+  bodyAgeYears       Float?
+  leanBodyMassLbs    Float?
+  fatFreeWeightLbs   Float?
+  heartRateBpm       Float?
+  // Tape measurements (inches) for the US Navy body-fat estimate (src/lib/body-weight.ts)
+  neckIn             Float?
+  waistIn            Float?
+  heightIn           Float?
+  source             String   @default("Manual")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([date])
+  @@map("body_measurements")
+}
+
+// Daily Apple Health metrics pushed by Health Auto Export
+// (src/lib/apple-health.ts). One row per metric per calendar day.
+model HealthMetric {
+  id        String   @id @default(cuid())
+  name      String // Health Auto Export metric name, e.g. "resting_heart_rate"
+  date      DateTime // UTC calendar day label (midnight)
+  units     String?
+  qty       Float? // daily total (steps, energy) or average (resting HR, HRV)
+  min       Float? // heart_rate only
+  avg       Float?
+  max       Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([name, date])
+  @@index([date])
+  @@map("health_metrics")
+}
+
+// Raw Apple Health metric points at the app's granularity; health_metrics
+// day rows are re-summarized from these (src/lib/apple-health.ts).
+model HealthSample {
+  id   String   @id @default(cuid())
+  name String
+  at   DateTime // point timestamp
+  day  DateTime // local calendar day label (UTC midnight)
+  qty  Float?
+  min  Float?
+  avg  Float?
+  max  Float?
+
+  @@unique([name, at])
+  @@index([name, day])
+  @@map("health_samples")
+}
+
+// Goal tracking for quarterly and annual targets
+model Goal {
+  id   String @id @default(cuid())
+  name String
+  year Int
+
+  // Annual targets
+  annualWeightTarget   Float // Total lbs for the year
+  minutesPerSession    Int // Minutes per individual session
+  weeklySessionsTarget Int // Sessions per week
+
+  // Calculated fields (derived from above)
+  weeklyMinutesTarget     Int // minutesPerSession * weeklySessionsTarget
+  annualMinutesTarget     Int // weeklyMinutesTarget * 52
+  quarterlyWeightTarget   Float // annualWeightTarget / 4
+  quarterlyMinutesTarget  Int // annualMinutesTarget / 4
+  quarterlySessionsTarget Int // weeklySessionsTarget * 13
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("goals")
+}
+
+// Monthly summaries (auto-calculated from workout sessions)
+model MonthlySummary {
+  id            String   @id @default(cuid())
+  year          Int
+  month         Int // 1-12
+  totalMinutes  Int
+  totalMiles    Float
+  totalSessions Int
+  averageWeight Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([year, month])
+  @@map("monthly_summaries")
+}
+
+// Audit log (F-06) — every bearer-authed mutation, plus session mutations,
+// records a row here so a leaked MCP_API_TOKEN leaves a trail.
+model AuditLog {
+  id        String   @id @default(cuid())
+  // "session" for NextAuth users, "bearer" for MCP_API_TOKEN callers.
+  authMode  String
+  // Best-effort identity. For "session" this is the user email. For
+  // "bearer" it is the constant string "mcp-pat".
+  actor     String
+  // Short action key: e.g. "workout.create", "workout.delete",
+  // "peloton.sync", "weight.log".
+  action    String
+  // Route path, for cross-reference with logs.
+  path      String
+  // Caller IP from x-forwarded-for / x-real-ip, "unknown" otherwise.
+  ip        String?
+  // Free-form JSON details (input filters, result counts, target IDs).
+  details   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([authMode, createdAt])
+  @@map("audit_log")
+}
+
+// OAuth 2.1 authorization server for remote MCP clients (claude.ai,
+// ChatGPT) — see src/lib/oauth.ts. Codes and tokens are stored as
+// SHA-256 hashes; the raw values only ever exist on the client.
+model OAuthClient {
+  id           String   @id @default(cuid()) // the OAuth client_id
+  name         String
+  redirectUris String[]
+  createdAt    DateTime @default(now())
+
+  @@map("oauth_clients")
+}
+
+model OAuthCode {
+  id            String    @id @default(cuid())
+  codeHash      String    @unique
+  clientId      String
+  redirectUri   String
+  codeChallenge String // PKCE S256 challenge
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@map("oauth_codes")
+}
+
+model OAuthToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  kind      String // "access" | "refresh"
+  clientId  String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([clientId])
+  @@map("oauth_tokens")
+}
